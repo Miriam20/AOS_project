@@ -42,9 +42,10 @@ struct cpu_data_t
 {
     uint64_t prev_quota;
     uint64_t prev_used;
+    uint64_t prev_delta;
     uint64_t available;
     uint64_t next_quota;
-}
+};
 
 namespace bbque { namespace plugins {
 
@@ -91,8 +92,9 @@ public:
     */
     ExitCode_t Schedule(System & system, RViewToken_t & status_view);
     ExitCode_t AssignWorkingMode(bbque::app::AppCPtr_t papp);
-    ba::AwmPtr_t AdjustQuota(bbque::app::AppCPtr_t papp, ba::AwmPtr_t pawm);
-    Adaptive_cpuSchedPol::InitializeCPUData(bbque::app::AppCPtr_t papp);
+    ba::AwmPtr_t AssignQuota(bbque::app::AppCPtr_t papp, ba::AwmPtr_t pawm);
+    void InitializeCPUData(bbque::app::AppCPtr_t papp);
+    void ComputeQuota();
     
 private:
 

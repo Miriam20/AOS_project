@@ -30,7 +30,7 @@
 #include "bbque/binding_manager.h"
 
 #define MODULE_CONFIG SCHEDULER_POLICY_CONFIG "." SCHEDULER_POLICY_NAME
-#define INITIAL_DEFAULT_QUOTA 100
+#define INITIAL_DEFAULT_QUOTA 0x0000000000000190
 
 using namespace std::placeholders;
 
@@ -89,32 +89,46 @@ SchedulerPolicyIF::ExitCode_t Adaptive_cpuSchedPol::_Init() {
 ************ MY CODE*************
 ********************************/
 
-void Adaptive_cpuSchedPol::InitializeCPUData(bbque::app::AppCPtr_t papp)
+// TODO: capire cpu_usage e perché prev_quota non cambia ad ogni round
+void Adaptive_cpuSchedPol::ComputeQuota()
 {
-    cpu_data.prev_quota = ra->UsedBy(
-        "sys.cpu.pe",
-        papp,
-        0);
-    cpu_data.prev_used = ra->Used("sys.cpu.pe");
-    cpu_data.available = ra->Available("sys.cpu.pe");
+    if (cpu_data.prev_quota == 0){
+        logger->Info("ENTRO IN prev_quota == 0");
+        cpu_data.next_quota = static_cast<uint64_t>(INITIAL_DEFAULT_QUOTA);
+    }
+    
+    else if (cpu_data.prev_delta != 0){
+        logger->Info("ENTRO IN prev_delta > 0");
+        //TODO: vedere come varia available
+        cpu_data.next_quota = static_cast<uint64_t>(
+            cpu_data.prev_quota - cpu_data.prev_delta/2);
+    }
+    else {
+        logger->Info("ENTRO IN else");
+        cpu_data.next_quota = static_cast<uint64_t>(
+            cpu_data.prev_quota*1.2);
+    }
+    logger->Info("ASSIGNED QUOTA: [%i] "
+            "PREVIOUS QUOTA=%i PREVIOUS USED=%i, DELTA=%i AVAILABLE=%i]",
+            cpu_data.next_quota,
+            cpu_data.prev_quota,
+            cpu_data.prev_used,
+            cpu_data.prev_delta,
+            cpu_data.available);
+        
 }
 
-ba::AwmPtr_t Adaptive_cpuSchedPol::AdjustQuota(bbque::app::AppCPtr_t papp, ba::AwmPtr_t pawm)
-{
+ba::AwmPtr_t Adaptive_cpuSchedPol::AssignQuota(bbque::app::AppCPtr_t papp, ba::AwmPtr_t pawm){
     auto prof = papp->GetRuntimeProfile();
 
     if (pawm == nullptr) 
     {
         //First round
         pawm = std::make_shared<ba::WorkingMode>(
-        papp->WorkingModes().size(), "MEDIOCRE", 1, papp);
-        cpu_data.next_quota = INITIAL_DEFAULT_QUOTA;
+            papp->WorkingModes().size(), "MEDIOCRE", 1, papp);
     }
     
-    else
-    {
-        assigned_quota = prof.cpu_usage - prof.cpu_usage * prof.ggap_percent;
-    }
+    Adaptive_cpuSchedPol::ComputeQuota();
     
     pawm->AddResourceRequest(
         "sys.cpu.pe",
@@ -123,6 +137,18 @@ ba::AwmPtr_t Adaptive_cpuSchedPol::AdjustQuota(bbque::app::AppCPtr_t papp, ba::A
     
     return pawm;
     
+}
+
+
+void Adaptive_cpuSchedPol::InitializeCPUData(bbque::app::AppCPtr_t papp){
+    cpu_data.prev_quota = ra.UsedBy(
+        "sys.cpu.pe",
+        papp,
+        0);
+    auto prof = papp->GetRuntimeProfile();
+    cpu_data.prev_used = prof.cpu_usage;
+    cpu_data.prev_delta = cpu_data.prev_quota - cpu_data.prev_used;
+    cpu_data.available = ra.Available("sys.cpu.pe");
 }
     
 
@@ -150,8 +176,8 @@ Adaptive_cpuSchedPol::AssignWorkingMode(bbque::app::AppCPtr_t papp)
     
     ba::AwmPtr_t pawm = papp->CurrentAWM();
     
-    Adaptive_cpuSchedPol::InitializeCPUData(bbque::app::AppCPtr_t papp);
-    pawm = Adaptive_cpuSchedPol::AdjustQuota(papp, pawm);
+    Adaptive_cpuSchedPol::InitializeCPUData(papp);
+    pawm = Adaptive_cpuSchedPol::AssignQuota(papp, pawm);
     
     // Look for the first available CPU
     BindingManager & bdm(BindingManager::GetInstance());
