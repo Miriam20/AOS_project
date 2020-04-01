@@ -30,7 +30,12 @@
 #include "bbque/binding_manager.h"
 
 #define MODULE_CONFIG SCHEDULER_POLICY_CONFIG "." SCHEDULER_POLICY_NAME
-#define INITIAL_DEFAULT_QUOTA 0x0000000000000190
+// #define INITIAL_DEFAULT_QUOTA 0x0000000000000064
+// #define ADMISSIBLE_DELTA 0x0000000000000010
+#define INITIAL_DEFAULT_QUOTA 100
+#define ADMISSIBLE_DELTA 10
+#define QUOTA_EXPANSION_TERM 0.2
+#define QUOTA_REDUCTION_TERM 2
 
 using namespace std::placeholders;
 
@@ -89,27 +94,40 @@ SchedulerPolicyIF::ExitCode_t Adaptive_cpuSchedPol::_Init() {
 ************ MY CODE*************
 ********************************/
 
-// TODO: capire cpu_usage e perché prev_quota non cambia ad ogni round
+
 void Adaptive_cpuSchedPol::ComputeQuota()
 {
     if (cpu_data.prev_quota == 0){
-        logger->Info("ENTRO IN prev_quota == 0");
-        cpu_data.next_quota = static_cast<uint64_t>(INITIAL_DEFAULT_QUOTA);
+        logger->Info("Assigning quota first round");
+        if (cpu_data.available < INITIAL_DEFAULT_QUOTA)
+            cpu_data.next_quota = cpu_data.available;
+        else 
+            cpu_data.next_quota = static_cast<uint64_t>(INITIAL_DEFAULT_QUOTA);
+        
     }
     
-    else if (cpu_data.prev_delta != 0){
-        logger->Info("ENTRO IN prev_delta > 0");
-        //TODO: vedere come varia available
+    else if (cpu_data.prev_delta > ADMISSIBLE_DELTA){
+        logger->Info("Reducing unused quota");
+        
         cpu_data.next_quota = static_cast<uint64_t>(
-            cpu_data.prev_quota - cpu_data.prev_delta/2);
+            cpu_data.prev_quota - cpu_data.prev_delta/QUOTA_REDUCTION_TERM);
+    }
+    else if (cpu_data.prev_delta == 0) {
+        logger->Info("Increasing quota");
+        uint64_t slack = cpu_data.prev_quota*QUOTA_EXPANSION_TERM;
+
+        if (cpu_data.available < slack)
+            cpu_data.next_quota = cpu_data.prev_quota + cpu_data.available;
+        else
+            cpu_data.next_quota = cpu_data.prev_quota + slack;
     }
     else {
-        logger->Info("ENTRO IN else");
-        cpu_data.next_quota = static_cast<uint64_t>(
-            cpu_data.prev_quota*1.2);
+        logger->Info("Confirming previously assigned quota");
+        
+        cpu_data.next_quota = cpu_data.prev_quota;
     }
-    logger->Info("ASSIGNED QUOTA: [%i] "
-            "PREVIOUS QUOTA=%i PREVIOUS USED=%i, DELTA=%i AVAILABLE=%i]",
+
+    logger->Info("Assigned quota=%d, Previous quota=%d, Previously used CPU=%d, Delta=%d Available cpu=%d",
             cpu_data.next_quota,
             cpu_data.prev_quota,
             cpu_data.prev_used,
@@ -118,22 +136,18 @@ void Adaptive_cpuSchedPol::ComputeQuota()
         
 }
 
-ba::AwmPtr_t Adaptive_cpuSchedPol::AssignQuota(bbque::app::AppCPtr_t papp, ba::AwmPtr_t pawm){
+ba::AwmPtr_t Adaptive_cpuSchedPol::AssignQuota(bbque::app::AppCPtr_t papp){
     auto prof = papp->GetRuntimeProfile();
-
-    if (pawm == nullptr) 
-    {
-        //First round
-        pawm = std::make_shared<ba::WorkingMode>(
+    
+    ba::AwmPtr_t pawm = std::make_shared<ba::WorkingMode>(
             papp->WorkingModes().size(), "MEDIOCRE", 1, papp);
-    }
     
     Adaptive_cpuSchedPol::ComputeQuota();
     
     pawm->AddResourceRequest(
         "sys.cpu.pe",
         cpu_data.next_quota,
-        br::ResourceAssignment::Policy::BALANCED);
+        br::ResourceAssignment::Policy::SEQUENTIAL);
     
     return pawm;
     
@@ -174,10 +188,8 @@ Adaptive_cpuSchedPol::AssignWorkingMode(bbque::app::AppCPtr_t papp)
             prof.is_valid);
     }
     
-    ba::AwmPtr_t pawm = papp->CurrentAWM();
-    
     Adaptive_cpuSchedPol::InitializeCPUData(papp);
-    pawm = Adaptive_cpuSchedPol::AssignQuota(papp, pawm);
+    ba::AwmPtr_t pawm = Adaptive_cpuSchedPol::AssignQuota(papp);
     
     // Look for the first available CPU
     BindingManager & bdm(BindingManager::GetInstance());

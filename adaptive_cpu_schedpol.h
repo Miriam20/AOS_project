@@ -92,7 +92,7 @@ public:
     */
     ExitCode_t Schedule(System & system, RViewToken_t & status_view);
     ExitCode_t AssignWorkingMode(bbque::app::AppCPtr_t papp);
-    ba::AwmPtr_t AssignQuota(bbque::app::AppCPtr_t papp, ba::AwmPtr_t pawm);
+    ba::AwmPtr_t AssignQuota(bbque::app::AppCPtr_t papp);
     void InitializeCPUData(bbque::app::AppCPtr_t papp);
     void ComputeQuota();
     
