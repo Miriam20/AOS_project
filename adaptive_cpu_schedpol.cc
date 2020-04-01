@@ -30,8 +30,7 @@
 #include "bbque/binding_manager.h"
 
 #define MODULE_CONFIG SCHEDULER_POLICY_CONFIG "." SCHEDULER_POLICY_NAME
-// #define INITIAL_DEFAULT_QUOTA 0x0000000000000064
-// #define ADMISSIBLE_DELTA 0x0000000000000010
+
 #define INITIAL_DEFAULT_QUOTA 100
 #define ADMISSIBLE_DELTA 10
 #define QUOTA_EXPANSION_TERM 0.2
@@ -83,6 +82,27 @@ void * Adaptive_cpuSchedPol::Create(PF_ObjectParams *) {
 
 
 SchedulerPolicyIF::ExitCode_t Adaptive_cpuSchedPol::_Init() {
+    // Processing elements IDs
+    auto & resource_types = sys->ResourceTypes();
+    auto const & r_ids_entry = resource_types.find(br::ResourceType::PROC_ELEMENT);
+    pe_ids = r_ids_entry->second;
+    logger->Info("Init: %d processing elements available", pe_ids.size());
+    if (pe_ids.empty()) {
+        logger->Crit("Init: not available CPU cores!");
+        return SCHED_R_UNAVAILABLE;
+    }
+
+    // Get all the system nodes
+    auto sys_rsrcs = sys->GetResources("sys");
+    logger->Info("Init: %d systems node(s) available", sys_rsrcs.size());
+    for (auto & sys_rsrc : sys_rsrcs) {
+        sys_ids.push_back(sys_rsrc->ID());
+    }
+
+    // Applications count
+    nr_apps = sys->SchedulablesCount(ba::Schedulable::READY);
+    nr_apps += sys->SchedulablesCount(ba::Schedulable::RUNNING);
+    logger->Info("Init: nr. active applications = %d", nr_apps);
 
     return SCHED_OK;
 }
@@ -95,74 +115,83 @@ SchedulerPolicyIF::ExitCode_t Adaptive_cpuSchedPol::_Init() {
 ********************************/
 
 
-void Adaptive_cpuSchedPol::ComputeQuota()
+void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo)
 {
-    if (cpu_data.prev_quota == 0){
+    if (ainfo->prev_quota == 0){
         logger->Info("Assigning quota first round");
-        if (cpu_data.available < INITIAL_DEFAULT_QUOTA)
-            cpu_data.next_quota = cpu_data.available;
+
+        if (ainfo->available < INITIAL_DEFAULT_QUOTA)
+            ainfo->next_quota = ainfo->available;
         else 
-            cpu_data.next_quota = static_cast<uint64_t>(INITIAL_DEFAULT_QUOTA);
+//             
+            ainfo->next_quota = static_cast<uint64_t>(INITIAL_DEFAULT_QUOTA);
         
+        logger->Info("Assigned quota=%d, Previous quota=%d, Previously used CPU=%d, Delta=%d Available cpu=%d",
+            ainfo->next_quota,
+            ainfo->prev_quota,
+            ainfo->prev_used,
+            ainfo->prev_delta,
+            ainfo->available);
+        
+        return;
     }
     
-    else if (cpu_data.prev_delta > ADMISSIBLE_DELTA){
+    uint64_t coef1, coef2;
+    uint64_t surplus = 0;
+    uint64_t slack = 0;
+    
+    if (ainfo->prev_delta > ADMISSIBLE_DELTA){
+        coef1 = 0;
+        coef2 = 1;
         logger->Info("Reducing unused quota");
         
-        cpu_data.next_quota = static_cast<uint64_t>(
-            cpu_data.prev_quota - cpu_data.prev_delta/QUOTA_REDUCTION_TERM);
+        surplus = static_cast<uint64_t>(
+             ainfo->prev_delta/QUOTA_REDUCTION_TERM);
     }
-    else if (cpu_data.prev_delta == 0) {
+    else if (ainfo->prev_delta == 0) {
+        coef1 = 1;
+        coef2 = 0;
         logger->Info("Increasing quota");
-        uint64_t slack = cpu_data.prev_quota*QUOTA_EXPANSION_TERM;
 
-        if (cpu_data.available < slack)
-            cpu_data.next_quota = cpu_data.prev_quota + cpu_data.available;
+        if (ainfo->available < ainfo->prev_quota*QUOTA_EXPANSION_TERM)
+            slack = ainfo->available;
         else
-            cpu_data.next_quota = cpu_data.prev_quota + slack;
+            slack = static_cast<uint64_t>(
+                ainfo->prev_quota*QUOTA_EXPANSION_TERM);
     }
     else {
+        coef1 = 0;
+        coef2 = 0;
         logger->Info("Confirming previously assigned quota");
-        
-        cpu_data.next_quota = cpu_data.prev_quota;
     }
+    
+    //Uniqueformula to compute quota
+    ainfo->next_quota = ainfo->prev_quota + coef1*slack - coef2*surplus;
+    
 
     logger->Info("Assigned quota=%d, Previous quota=%d, Previously used CPU=%d, Delta=%d Available cpu=%d",
-            cpu_data.next_quota,
-            cpu_data.prev_quota,
-            cpu_data.prev_used,
-            cpu_data.prev_delta,
-            cpu_data.available);
+            ainfo->next_quota,
+            ainfo->prev_quota,
+            ainfo->prev_used,
+            ainfo->prev_delta,
+            ainfo->available);
         
 }
 
-ba::AwmPtr_t Adaptive_cpuSchedPol::AssignQuota(bbque::app::AppCPtr_t papp){
-    auto prof = papp->GetRuntimeProfile();
-    
-    ba::AwmPtr_t pawm = std::make_shared<ba::WorkingMode>(
-            papp->WorkingModes().size(), "MEDIOCRE", 1, papp);
-    
-    Adaptive_cpuSchedPol::ComputeQuota();
-    
-    pawm->AddResourceRequest(
-        "sys.cpu.pe",
-        cpu_data.next_quota,
-        br::ResourceAssignment::Policy::SEQUENTIAL);
-    
-    return pawm;
-    
-}
 
-
-void Adaptive_cpuSchedPol::InitializeCPUData(bbque::app::AppCPtr_t papp){
-    cpu_data.prev_quota = ra.UsedBy(
+AppInfo_t Adaptive_cpuSchedPol::InitializeAppInfo(bbque::app::AppCPtr_t papp){
+    AppInfo_t ainfo;
+    
+    ainfo.prev_quota = ra.UsedBy(
         "sys.cpu.pe",
         papp,
         0);
     auto prof = papp->GetRuntimeProfile();
-    cpu_data.prev_used = prof.cpu_usage;
-    cpu_data.prev_delta = cpu_data.prev_quota - cpu_data.prev_used;
-    cpu_data.available = ra.Available("sys.cpu.pe");
+    ainfo.prev_used = prof.cpu_usage;
+    ainfo.prev_delta = ainfo.prev_quota - ainfo.prev_used;
+    ainfo.available = ra.Available("sys.cpu.pe");
+    
+    return ainfo;
 }
     
 
@@ -188,8 +217,17 @@ Adaptive_cpuSchedPol::AssignWorkingMode(bbque::app::AppCPtr_t papp)
             prof.is_valid);
     }
     
-    Adaptive_cpuSchedPol::InitializeCPUData(papp);
-    ba::AwmPtr_t pawm = Adaptive_cpuSchedPol::AssignQuota(papp);
+    AppInfo_t ainfo = Adaptive_cpuSchedPol::InitializeAppInfo(papp);
+    
+    ba::AwmPtr_t pawm = std::make_shared<ba::WorkingMode>(
+            papp->WorkingModes().size(), "MEDIOCRE", 1, papp);
+    
+    Adaptive_cpuSchedPol::ComputeQuota(&ainfo);
+    
+    pawm->AddResourceRequest(
+        "sys.cpu.pe",
+        ainfo.next_quota,
+        br::ResourceAssignment::Policy::SEQUENTIAL);
     
     // Look for the first available CPU
     BindingManager & bdm(BindingManager::GetInstance());

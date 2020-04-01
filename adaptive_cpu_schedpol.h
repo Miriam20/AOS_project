@@ -38,7 +38,7 @@ using bbque::utils::Timer;
 // These are the parameters received by the PluginManager on create calls
 struct PF_ObjectParams;
 
-struct cpu_data_t
+struct AppInfo_t
 {
     uint64_t prev_quota;
     uint64_t prev_used;
@@ -92,9 +92,8 @@ public:
     */
     ExitCode_t Schedule(System & system, RViewToken_t & status_view);
     ExitCode_t AssignWorkingMode(bbque::app::AppCPtr_t papp);
-    ba::AwmPtr_t AssignQuota(bbque::app::AppCPtr_t papp);
-    void InitializeCPUData(bbque::app::AppCPtr_t papp);
-    void ComputeQuota();
+    AppInfo_t InitializeAppInfo(bbque::app::AppCPtr_t papp);
+    void ComputeQuota(AppInfo_t * ainfo);
     
 private:
 
@@ -107,7 +106,11 @@ private:
     /** System logger instance */
     std::unique_ptr<bu::Logger> logger;
     
-    cpu_data_t cpu_data;
+    std::set<BBQUE_RID_TYPE> pe_ids;
+    
+    std::vector<uint32_t> sys_ids;
+
+    uint32_t nr_apps;
 
     /**
     * @brief Constructor
