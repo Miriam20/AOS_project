@@ -40,6 +40,8 @@ struct PF_ObjectParams;
 
 struct AppInfo_t
 {
+    bbque::app::AppCPtr_t papp;
+    bbque::app::AwmPtr_t pawm;
     uint64_t prev_quota;
     uint64_t prev_used;
     uint64_t prev_delta;

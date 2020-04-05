@@ -92,13 +92,6 @@ SchedulerPolicyIF::ExitCode_t Adaptive_cpuSchedPol::_Init() {
         return SCHED_R_UNAVAILABLE;
     }
 
-    // Get all the system nodes
-    auto sys_rsrcs = sys->GetResources("sys");
-    logger->Info("Init: %d systems node(s) available", sys_rsrcs.size());
-    for (auto & sys_rsrc : sys_rsrcs) {
-        sys_ids.push_back(sys_rsrc->ID());
-    }
-
     // Applications count
     nr_apps = sys->SchedulablesCount(ba::Schedulable::READY);
     nr_apps += sys->SchedulablesCount(ba::Schedulable::RUNNING);
@@ -117,56 +110,60 @@ SchedulerPolicyIF::ExitCode_t Adaptive_cpuSchedPol::_Init() {
 
 void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo)
 {
-    if (ainfo->prev_quota == 0){
-        logger->Info("Assigning quota first round");
-
-        if (ainfo->available < INITIAL_DEFAULT_QUOTA)
-            ainfo->next_quota = ainfo->available;
-        else 
-//             
-            ainfo->next_quota = static_cast<uint64_t>(INITIAL_DEFAULT_QUOTA);
-        
-        logger->Info("Assigned quota=%d, Previous quota=%d, Previously used CPU=%d, Delta=%d Available cpu=%d",
-            ainfo->next_quota,
-            ainfo->prev_quota,
-            ainfo->prev_used,
-            ainfo->prev_delta,
-            ainfo->available);
-        
-        return;
-    }
-    
+    std::string desc;
     uint64_t coef1, coef2;
     uint64_t surplus = 0;
     uint64_t slack = 0;
     
-    if (ainfo->prev_delta > ADMISSIBLE_DELTA){
+    if (ainfo->pawm == nullptr){
+        coef1 = 0;
+        coef2 = 0;
+    
+        logger->Info("Assigning quota first round");
+        
+        desc = "Default";
+
+        if (ainfo->available < INITIAL_DEFAULT_QUOTA)
+            ainfo->next_quota = ainfo->available;
+        else           
+            ainfo->next_quota = INITIAL_DEFAULT_QUOTA;
+        }
+    
+    else if (ainfo->prev_delta > ADMISSIBLE_DELTA){
         coef1 = 0;
         coef2 = 1;
+        
         logger->Info("Reducing unused quota");
         
-        surplus = static_cast<uint64_t>(
-             ainfo->prev_delta/QUOTA_REDUCTION_TERM);
+        surplus = ainfo->prev_delta/QUOTA_REDUCTION_TERM;
+        desc = "Decreased";
     }
     else if (ainfo->prev_delta == 0) {
         coef1 = 1;
         coef2 = 0;
+        
         logger->Info("Increasing quota");
 
         if (ainfo->available < ainfo->prev_quota*QUOTA_EXPANSION_TERM)
             slack = ainfo->available;
         else
-            slack = static_cast<uint64_t>(
-                ainfo->prev_quota*QUOTA_EXPANSION_TERM);
+            slack = ainfo->prev_quota*QUOTA_EXPANSION_TERM;
+        desc = "Enhanced";
     }
     else {
         coef1 = 0;
         coef2 = 0;
         logger->Info("Confirming previously assigned quota");
+        desc = "Stable";
     }
     
-    //Uniqueformula to compute quota
+    //Unique formula to compute quota
     ainfo->next_quota = ainfo->prev_quota + coef1*slack - coef2*surplus;
+    
+    ainfo->pawm = std::make_shared<ba::WorkingMode>(
+        ainfo->papp->WorkingModes().size(), desc, 1, ainfo->papp);
+    
+    assert(ainfo->pawm);
     
 
     logger->Info("Assigned quota=%d, Previous quota=%d, Previously used CPU=%d, Delta=%d Available cpu=%d",
@@ -175,13 +172,14 @@ void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo)
             ainfo->prev_used,
             ainfo->prev_delta,
             ainfo->available);
-        
 }
 
 
 AppInfo_t Adaptive_cpuSchedPol::InitializeAppInfo(bbque::app::AppCPtr_t papp){
     AppInfo_t ainfo;
     
+    ainfo.papp = papp;
+    ainfo.pawm = papp->CurrentAWM();
     ainfo.prev_quota = ra.UsedBy(
         "sys.cpu.pe",
         papp,
@@ -217,17 +215,22 @@ Adaptive_cpuSchedPol::AssignWorkingMode(bbque::app::AppCPtr_t papp)
             prof.is_valid);
     }
     
+    /*if (papp->Running()){
+        bbque::app::AwmPtr_t pawm = papp->CurrentAWM();
+        papp->CurrentAWM()->ClearResourceRequests();
+//         papp->CurrentAWM()->ClearResourceBinding();
+    }
+    */
     AppInfo_t ainfo = Adaptive_cpuSchedPol::InitializeAppInfo(papp);
     
-    ba::AwmPtr_t pawm = std::make_shared<ba::WorkingMode>(
-            papp->WorkingModes().size(), "MEDIOCRE", 1, papp);
-    
     Adaptive_cpuSchedPol::ComputeQuota(&ainfo);
+    
+    auto pawm = ainfo.pawm;
     
     pawm->AddResourceRequest(
         "sys.cpu.pe",
         ainfo.next_quota,
-        br::ResourceAssignment::Policy::SEQUENTIAL);
+        br::ResourceAssignment::Policy::BALANCED);
     
     // Look for the first available CPU
     BindingManager & bdm(BindingManager::GetInstance());
@@ -258,7 +261,7 @@ Adaptive_cpuSchedPol::AssignWorkingMode(bbque::app::AppCPtr_t papp)
                 papp->StrId());
             continue;
         }
-            
+        
         return SCHED_OK;
     }
     
