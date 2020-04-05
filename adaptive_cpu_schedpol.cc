@@ -116,20 +116,30 @@ void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo)
     uint64_t slack = 0;
     
     if (ainfo->pawm == nullptr){
-        coef1 = 0;
-        coef2 = 0;
     
-        logger->Info("Assigning quota first round");
-        
-        desc = "Default";
+        logger->Info("Computing quota first round");
 
         if (ainfo->available < INITIAL_DEFAULT_QUOTA)
             ainfo->next_quota = ainfo->available;
         else           
             ainfo->next_quota = INITIAL_DEFAULT_QUOTA;
-        }
+        
+        ainfo->pawm = std::make_shared<ba::WorkingMode>(
+        ainfo->papp->WorkingModes().size(), "Default", 1, ainfo->papp);
     
-    else if (ainfo->prev_delta > ADMISSIBLE_DELTA){
+        assert(ainfo->pawm);
+        
+        logger->Info("Next quota=%d, Previous quota=%d, Previously used CPU=%d, Delta=%d Available cpu=%d",
+            ainfo->next_quota,
+            ainfo->prev_quota,
+            ainfo->prev_used,
+            ainfo->prev_delta,
+            ainfo->available);
+        
+        return;
+    }
+    
+    if (ainfo->prev_delta > ADMISSIBLE_DELTA){
         coef1 = 0;
         coef2 = 1;
         
@@ -165,8 +175,7 @@ void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo)
     
     assert(ainfo->pawm);
     
-
-    logger->Info("Assigned quota=%d, Previous quota=%d, Previously used CPU=%d, Delta=%d Available cpu=%d",
+    logger->Info("Next quota=%d, Previous quota=%d, Previously used CPU=%d, Delta=%d Available cpu=%d",
             ainfo->next_quota,
             ainfo->prev_quota,
             ainfo->prev_used,
