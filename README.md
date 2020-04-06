@@ -8,6 +8,6 @@
 
 ### 2) In all rounds after the first:
  Consider delta= prev_quota-prev_cpu_usage >=0, slack as an amount of cpu proportional to the previous round quota and surplus as an amount of cpu proportional to delta.
-  - If 0 < delta < ADMISSIBLE_DELTA, the same quota of the previous round is assigned
-  - if delta>ADMISSIBLE_DELTA, next_quota=prev_quota-surplus
+  - If 0 < delta < ADMISSIBLE_DELTA or delta==prev_quota, the same quota of the previous round is assigned
+  - if prev_quota>delta>ADMISSIBLE_DELTA, next_quota=prev_quota-surplus
   - If delta==0, next_quota=prev_quota + min(slack, available_cpu)
