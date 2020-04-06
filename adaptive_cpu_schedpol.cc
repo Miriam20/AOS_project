@@ -31,8 +31,6 @@
 
 #define MODULE_CONFIG SCHEDULER_POLICY_CONFIG "." SCHEDULER_POLICY_NAME
 
-#define SAFETY_BOUND 10
-
 #define INITIAL_DEFAULT_QUOTA 100
 #define ADMISSIBLE_DELTA 10
 #define QUOTA_EXPANSION_TERM 0.2
@@ -346,7 +344,7 @@ Adaptive_cpuSchedPol::Schedule(
     * INSERT YOUR CODE HERE
     **/
     
-    available_cpu = ra.Available("sys.cpu.pe")/* - SAFETY_BOUND*/;
+    available_cpu = ra.Available("sys.cpu.pe");
     
     auto assign_awm = std::bind(
         static_cast<ExitCode_t (Adaptive_cpuSchedPol::*)(ba::AppCPtr_t)>
