@@ -31,6 +31,8 @@
 
 #define MODULE_CONFIG SCHEDULER_POLICY_CONFIG "." SCHEDULER_POLICY_NAME
 
+#define SAFETY_BOUND 10
+
 #define INITIAL_DEFAULT_QUOTA 100
 #define ADMISSIBLE_DELTA 10
 #define QUOTA_EXPANSION_TERM 0.2
@@ -41,7 +43,8 @@ using namespace std::placeholders;
 namespace bu = bbque::utils;
 namespace po = boost::program_options;
 
-namespace bbque { namespace plugins {
+namespace bbque { 
+    namespace plugins {
     
 
 // :::::::::::::::::::::: Static plugin interface ::::::::::::::::::::::::::::
@@ -110,6 +113,7 @@ SchedulerPolicyIF::ExitCode_t Adaptive_cpuSchedPol::_Init() {
 
 void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo)
 {
+    logger->Info("Computing quota for [%s]", ainfo->papp->StrId());
     std::string desc;
     uint64_t coef1, coef2;
     uint64_t surplus = 0;
@@ -119,8 +123,8 @@ void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo)
     
         logger->Info("Computing quota first round");
 
-        if (ainfo->available < INITIAL_DEFAULT_QUOTA)
-            ainfo->next_quota = ainfo->available;
+        if (available_cpu < INITIAL_DEFAULT_QUOTA)
+            ainfo->next_quota = available_cpu;
         else           
             ainfo->next_quota = INITIAL_DEFAULT_QUOTA;
         
@@ -129,17 +133,27 @@ void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo)
     
         assert(ainfo->pawm);
         
+        available_cpu -= ainfo->next_quota;
+        
         logger->Info("Next quota=%d, Previous quota=%d, Previously used CPU=%d, Delta=%d Available cpu=%d",
             ainfo->next_quota,
             ainfo->prev_quota,
             ainfo->prev_used,
             ainfo->prev_delta,
-            ainfo->available);
+            available_cpu);
         
         return;
     }
     
-    if (ainfo->prev_delta > ADMISSIBLE_DELTA){
+    /*TEMPORARY: To elude cpu_usage problem
+     * I assume that the app needs more resources
+     * */
+    if ( ainfo->prev_delta > ainfo->prev_quota){
+        ainfo->prev_delta = 0;
+    }
+    
+    /*If prev_delta==prev_quota I want to go in the else branch since previous usage was 0, because in this case it is safe to assume that either the app does nothing and terminates releasing the resources or it hasn't started working yet*/
+    if (ainfo->prev_delta > ADMISSIBLE_DELTA && ainfo->prev_delta < ainfo->prev_quota){
         coef1 = 0;
         coef2 = 1;
         
@@ -154,8 +168,8 @@ void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo)
         
         logger->Info("Increasing quota");
 
-        if (ainfo->available < ainfo->prev_quota*QUOTA_EXPANSION_TERM)
-            slack = ainfo->available;
+        if (available_cpu < ainfo->prev_quota*QUOTA_EXPANSION_TERM)
+            slack = available_cpu;
         else
             slack = ainfo->prev_quota*QUOTA_EXPANSION_TERM;
         desc = "Enhanced";
@@ -175,12 +189,17 @@ void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo)
     
     assert(ainfo->pawm);
     
-    logger->Info("Next quota=%d, Previous quota=%d, Previously used CPU=%d, Delta=%d Available cpu=%d",
+    if (ainfo->next_quota > ainfo->prev_quota)
+        available_cpu -= ainfo->next_quota - ainfo->prev_quota;
+    else
+        available_cpu += ainfo->prev_quota - ainfo->next_quota;
+    
+    logger->Info("Next quota=%d, Previous quota=%d, Previously used CPU=%d, Delta=%u Available cpu=%d",
             ainfo->next_quota,
             ainfo->prev_quota,
             ainfo->prev_used,
             ainfo->prev_delta,
-            ainfo->available);
+            available_cpu);
 }
 
 
@@ -196,7 +215,6 @@ AppInfo_t Adaptive_cpuSchedPol::InitializeAppInfo(bbque::app::AppCPtr_t papp){
     auto prof = papp->GetRuntimeProfile();
     ainfo.prev_used = prof.cpu_usage;
     ainfo.prev_delta = ainfo.prev_quota - ainfo.prev_used;
-    ainfo.available = ra.Available("sys.cpu.pe");
     
     return ainfo;
 }
@@ -224,13 +242,29 @@ Adaptive_cpuSchedPol::AssignWorkingMode(bbque::app::AppCPtr_t papp)
             prof.is_valid);
     }
     
-    /*if (papp->Running()){
-        bbque::app::AwmPtr_t pawm = papp->CurrentAWM();
-        papp->CurrentAWM()->ClearResourceRequests();
-//         papp->CurrentAWM()->ClearResourceBinding();
-    }
-    */
     AppInfo_t ainfo = Adaptive_cpuSchedPol::InitializeAppInfo(papp);
+    
+    logger->Info("Initialized app [%s] info: Previous quota=%d, Previously used CPU=%d, Delta=%u Available cpu=%d",
+            papp->StrId(),
+            ainfo.prev_quota,
+            ainfo.prev_used,
+            ainfo.prev_delta,
+            available_cpu);
+    
+    if (available_cpu == 0 && ainfo.prev_delta == 0){
+        if (ainfo.pawm == nullptr){
+            logger->Info("AssignWorkingMode: Not enough available resources to schedule [%s]",
+                papp->StrId());
+            return SCHED_SKIP_APP;
+        }
+        else {
+            logger->Error("AssignWorkingMode: Not enough available resources to increase quota of [%s]",
+                papp->StrId());
+            am.ScheduleRequestAsPrev(papp, sched_status_view);
+            return SCHED_OK;
+        }
+    }
+        
     
     Adaptive_cpuSchedPol::ComputeQuota(&ainfo);
     
@@ -239,7 +273,7 @@ Adaptive_cpuSchedPol::AssignWorkingMode(bbque::app::AppCPtr_t papp)
     pawm->AddResourceRequest(
         "sys.cpu.pe",
         ainfo.next_quota,
-        br::ResourceAssignment::Policy::BALANCED);
+        br::ResourceAssignment::Policy::SEQUENTIAL);
     
     // Look for the first available CPU
     BindingManager & bdm(BindingManager::GetInstance());
@@ -306,6 +340,9 @@ Adaptive_cpuSchedPol::Schedule(
     /** 
     * INSERT YOUR CODE HERE
     **/
+    
+    available_cpu = ra.Available("sys.cpu.pe")/* - SAFETY_BOUND*/;
+    
     auto assign_awm = std::bind(
         static_cast<ExitCode_t (Adaptive_cpuSchedPol::*)(ba::AppCPtr_t)>
         (&Adaptive_cpuSchedPol::AssignWorkingMode),

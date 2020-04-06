@@ -45,7 +45,6 @@ struct AppInfo_t
     uint64_t prev_quota;
     uint64_t prev_used;
     uint64_t prev_delta;
-    uint64_t available;
     uint64_t next_quota;
 };
 
@@ -111,6 +110,8 @@ private:
     std::set<BBQUE_RID_TYPE> pe_ids;
     
     std::vector<uint32_t> sys_ids;
+    
+    uint64_t available_cpu;
 
     uint32_t nr_apps;
 
