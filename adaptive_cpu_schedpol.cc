@@ -152,6 +152,7 @@ void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo)
         ainfo->prev_delta = 0;
     }
     
+    //Too much quota hasn't been used
     /*If prev_delta==prev_quota I want to go in the else branch since previous usage was 0, because in this case it is safe to assume that either the app does nothing and terminates releasing the resources or it hasn't started working yet*/
     if (ainfo->prev_delta > ADMISSIBLE_DELTA && ainfo->prev_delta < ainfo->prev_quota){
         coef1 = 0;
@@ -162,6 +163,8 @@ void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo)
         surplus = ainfo->prev_delta/QUOTA_REDUCTION_TERM;
         desc = "Decreased";
     }
+    
+    //All quota has been used, the app needs more
     else if (ainfo->prev_delta == 0) {
         coef1 = 1;
         coef2 = 0;
@@ -174,6 +177,8 @@ void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo)
             slack = ainfo->prev_quota*QUOTA_EXPANSION_TERM;
         desc = "Enhanced";
     }
+    
+    //The assigned quota was almost totally used or the app hasn't started its work yet, previous given quota was correct
     else {
         coef1 = 0;
         coef2 = 0;
@@ -242,6 +247,7 @@ Adaptive_cpuSchedPol::AssignWorkingMode(bbque::app::AppCPtr_t papp)
             prof.is_valid);
     }
     
+    //it just initializes a struct with all the info about the app, to have it in a compact way
     AppInfo_t ainfo = Adaptive_cpuSchedPol::InitializeAppInfo(papp);
     
     logger->Info("Initialized app [%s] info: Previous quota=%d, Previously used CPU=%d, Delta=%u Available cpu=%d",
@@ -265,7 +271,6 @@ Adaptive_cpuSchedPol::AssignWorkingMode(bbque::app::AppCPtr_t papp)
         }
     }
         
-    
     Adaptive_cpuSchedPol::ComputeQuota(&ainfo);
     
     auto pawm = ainfo.pawm;
