@@ -38,6 +38,8 @@ using bbque::utils::Timer;
 // These are the parameters received by the PluginManager on create calls
 struct PF_ObjectParams;
 
+namespace bbque { namespace plugins {
+
 struct AppInfo_t
 {
     bbque::app::AppCPtr_t papp;
@@ -48,7 +50,68 @@ struct AppInfo_t
     uint64_t next_quota;
 };
 
-namespace bbque { namespace plugins {
+enum Sign {
+	POS,
+	NEG
+};
+
+struct SNum_t
+{
+     uint64_t value;
+     Sign sign;
+};
+
+static SNum_t ComputeSub(SNum_t a, SNum_t b){
+    SNum_t result;
+    
+    switch (a.sign)
+    {
+        case POS:
+            if (b.sign == NEG) {
+                result.value = a.value + b.value;
+                result.sign = POS;
+            }
+            else{
+                if (a.value > b.value){
+                    result.value = a.value - b.value;
+                    result.sign = POS;
+                }
+                else {
+                    result.value = b.value - a.value;
+                    result.sign = NEG;
+                }
+            }
+            break;
+            
+        case NEG:
+            if (b.sign == POS) {
+                result.value = a.value + b.value;
+                result.sign = NEG;
+            }
+            else{
+                if (a.value > b.value){
+                    result.value = a.value - b.value;
+                    result.sign = NEG;
+                }
+                else {
+                    result.value = b.value - a.value;
+                    result.sign = POS;
+                }
+            }
+    }
+    return result;
+}
+
+static SNum_t ComputeSum(SNum_t a, SNum_t b, SNum_t c){
+    SNum_t result;
+    b.sign = (b.sign == POS) ? NEG : POS;
+    c.sign = (c.sign == POS) ? NEG : POS;
+    
+    result = ComputeSub(a, b);
+    result = ComputeSub(result, c);
+    
+    return result;
+}
 
 class LoggerIF;
 
@@ -113,6 +176,10 @@ private:
     
     uint64_t available_cpu;
 
+    float kp;
+    float ki;
+    float kd;
+
     uint32_t nr_apps;
 
     /**
@@ -127,6 +194,7 @@ private:
     * @brief Optional initialization member function
     */
     ExitCode_t _Init();
+
 };
 
 } // namespace plugins

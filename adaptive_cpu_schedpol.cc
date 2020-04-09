@@ -35,7 +35,7 @@
 #define ADMISSIBLE_DELTA 10
 #define QUOTA_EXPANSION_TERM 0.2
 #define QUOTA_REDUCTION_TERM 2
-
+#define SPAZIO 10
 using namespace std::placeholders;
 
 namespace bu = bbque::utils;
@@ -44,7 +44,6 @@ namespace po = boost::program_options;
 namespace bbque { 
     namespace plugins {
     
-
 // :::::::::::::::::::::: Static plugin interface ::::::::::::::::::::::::::::
 
 void * Adaptive_cpuSchedPol::Create(PF_ObjectParams *) {
@@ -81,7 +80,6 @@ void * Adaptive_cpuSchedPol::Create(PF_ObjectParams *) {
 
 }
 
-
 SchedulerPolicyIF::ExitCode_t Adaptive_cpuSchedPol::_Init() {
     // Processing elements IDs
     auto & resource_types = sys->ResourceTypes();
@@ -108,14 +106,9 @@ SchedulerPolicyIF::ExitCode_t Adaptive_cpuSchedPol::_Init() {
 ************ MY CODE*************
 ********************************/
 
-
 void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo)
 {
     logger->Info("Computing quota for [%s]", ainfo->papp->StrId());
-    std::string desc;
-    uint64_t coef1, coef2;
-    uint64_t surplus = 0;
-    uint64_t slack = 0;
     
     if (ainfo->pawm == nullptr){
     
@@ -128,10 +121,16 @@ void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo)
         
         ainfo->pawm = std::make_shared<ba::WorkingMode>(
         ainfo->papp->WorkingModes().size(), "Default", 1, ainfo->papp);
-    
-        assert(ainfo->pawm);
+    	
+	//set initial integral positive and negative error
+	ainfo->papp->SetAttribute("iperr",std::to_string(0));
+	ainfo->papp->SetAttribute("inerr",std::to_string(0));
+	
+	//set initial derivative positive and negative error
+	ainfo->papp->SetAttribute("dperr",std::to_string(0)); 
+	ainfo->papp->SetAttribute("dnerr",std::to_string(0)); 
         
-        available_cpu -= ainfo->next_quota;
+	available_cpu -= ainfo->next_quota;
         
         logger->Info("Next quota=%d, Previous quota=%d, Previously used CPU=%d, Delta=%d Available cpu=%d",
             ainfo->next_quota,
@@ -150,54 +149,107 @@ void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo)
         ainfo->prev_delta = 0;
     }
     
-    //Too much quota hasn't been used
-    /*If prev_delta==prev_quota I want to go in the else branch since previous usage was 0, because in this case it is safe to assume that either the app does nothing and terminates releasing the resources or it hasn't started working yet*/
-    if (ainfo->prev_delta > ADMISSIBLE_DELTA && ainfo->prev_delta < ainfo->prev_quota){
-        coef1 = 0;
-        coef2 = 1;
-        
-        logger->Info("Reducing unused quota");
-        
-        surplus = ainfo->prev_delta/QUOTA_REDUCTION_TERM;
-        desc = "Decreased";
-    }
-    
-    //All quota has been used, the app needs more
-    else if (ainfo->prev_delta == 0) {
-        coef1 = 1;
-        coef2 = 0;
-        
-        logger->Info("Increasing quota");
+    uint64_t iperr, inerr;
+    SNum_t err, ierr, derr;
+    SNum_t pvar, ivar, dvar, var;
 
-        if (available_cpu < ainfo->prev_quota*QUOTA_EXPANSION_TERM)
-            slack = available_cpu;
-        else
-            slack = ainfo->prev_quota*QUOTA_EXPANSION_TERM;
-        desc = "Enhanced";
+    //proportional controller
+    if (ainfo->prev_delta > ADMISSIBLE_DELTA){
+	    err.value = ainfo->prev_delta - ADMISSIBLE_DELTA/2;
+	    err.sign = NEG;
+    }
+    else if (ainfo->prev_delta == 0){
+	    err.value = SPAZIO;
+	    err.sign = POS;
     }
     
-    //The assigned quota was almost totally used or the app hasn't started its work yet, previous given quota was correct
-    else {
-        coef1 = 0;
-        coef2 = 0;
-        logger->Info("Confirming previously assigned quota");
-        desc = "Stable";
+    //Error=0, we converged 
+    else{ 
+        
+        ainfo->next_quota = ainfo->prev_quota;
+        
+        ainfo->pawm = std::make_shared<ba::WorkingMode>(
+        ainfo->papp->WorkingModes().size(), "Convergent", 1, ainfo->papp);
+    
+        logger->Info("New settings: Next quota=%d, Previous quota=%d, Previously used CPU=%d, Delta=%u Available cpu=%d",
+                ainfo->next_quota,
+                ainfo->prev_quota,
+                ainfo->prev_used,
+                ainfo->prev_delta,
+                available_cpu);
+        return;
+    }
+
+    pvar.value = err.value*kp;
+    pvar.sign = err.sign;
+
+    //integral controller
+    iperr = std::stoull(ainfo->papp->GetAttribute("iperr"));
+    inerr = std::stoull(ainfo->papp->GetAttribute("inerr"));
+
+    if (err.sign == POS) iperr += err.value;
+    else inerr += err.value;
+
+    if (iperr > inerr) {
+	    ierr.value = iperr - inerr;
+	    ierr.sign = POS;
+    }
+    else{
+	    ierr.value = inerr - iperr;
+	    ierr.sign = NEG;
     }
     
-    //Unique formula to compute quota
-    ainfo->next_quota = ainfo->prev_quota + coef1*slack - coef2*surplus;
+    ivar.value = ierr.value*ki;
+    ivar.sign = ierr.sign;
+
+
+    //derivative controller
+    if (stoull(ainfo->papp->GetAttribute("dperr"))){
+        logger->Info("interno if");
+	    derr.value = stoull(ainfo->papp->GetAttribute("dperr"));
+	    derr.value = POS;
+    }
+    else{
+        derr.value = stoull(ainfo->papp->GetAttribute("dnerr"));
+        derr.value = NEG;
+    }
+    
+    dvar = ComputeSub(err, derr);
+    dvar.value *= kd;
+    
+    var = ComputeSum(pvar, ivar, dvar);
+    
+    if (var.sign == POS){
+        if (available_cpu < var.value)
+            var.value = available_cpu;
+        
+        ainfo->next_quota = ainfo->prev_quota + var.value;
+    }
+
+    else
+        ainfo->next_quota = ainfo->prev_quota + var.value;
+    
+    //update errors    
+    if (err.sign == POS){
+        ainfo->papp->SetAttribute("dnerr", std::to_string(0));
+        ainfo->papp->SetAttribute("dperr", std::to_string(err.value));
+        ainfo->papp->SetAttribute("iperr", std::to_string(iperr));
+    }
+    else{
+        ainfo->papp->SetAttribute("dnerr", std::to_string(err.value));
+        ainfo->papp->SetAttribute("dperr", std::to_string(0));
+        ainfo->papp->SetAttribute("inerr",std::to_string(inerr));
+    }
     
     ainfo->pawm = std::make_shared<ba::WorkingMode>(
-        ainfo->papp->WorkingModes().size(), desc, 1, ainfo->papp);
-    
-    assert(ainfo->pawm);
+        ainfo->papp->WorkingModes().size(), "Adaptation", 1, ainfo->papp);
     
     if (ainfo->next_quota > ainfo->prev_quota)
         available_cpu -= ainfo->next_quota - ainfo->prev_quota;
     else
         available_cpu += ainfo->prev_quota - ainfo->next_quota;
     
-    logger->Info("Next quota=%d, Previous quota=%d, Previously used CPU=%d, Delta=%u Available cpu=%d",
+    logger->Info("New settings: Next quota=%d, Previous quota=%d, Previously used CPU=%d, Delta=%u Available cpu=%d",
             ainfo->next_quota,
             ainfo->prev_quota,
             ainfo->prev_used,
@@ -343,6 +395,9 @@ Adaptive_cpuSchedPol::Schedule(
     /** 
     * INSERT YOUR CODE HERE
     **/
+    kp = 0.2;
+    ki = 0.2;
+    kd = 0.2;
     
     available_cpu = ra.Available("sys.cpu.pe");
     
