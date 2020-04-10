@@ -46,11 +46,11 @@ struct AppInfo_t
     bbque::app::AwmPtr_t pawm;
     uint64_t prev_quota;
     uint64_t prev_used;
-    uint64_t prev_delta;
+    int64_t prev_delta;
     uint64_t next_quota;
 };
 
-enum Sign {
+/*enum Sign {
 	POS,
 	NEG
 };
@@ -67,6 +67,7 @@ static SNum_t ComputeSub(SNum_t a, SNum_t b){
     switch (a.sign)
     {
         case POS:
+            logger->Info("interno POS");
             if (b.sign == NEG) {
                 result.value = a.value + b.value;
                 result.sign = POS;
@@ -84,6 +85,7 @@ static SNum_t ComputeSub(SNum_t a, SNum_t b){
             break;
             
         case NEG:
+            logger->Info("interno NEG");
             if (b.sign == POS) {
                 result.value = a.value + b.value;
                 result.sign = NEG;
@@ -111,7 +113,7 @@ static SNum_t ComputeSum(SNum_t a, SNum_t b, SNum_t c){
     result = ComputeSub(result, c);
     
     return result;
-}
+}*/
 
 class LoggerIF;
 

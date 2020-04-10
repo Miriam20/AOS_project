@@ -106,7 +106,116 @@ SchedulerPolicyIF::ExitCode_t Adaptive_cpuSchedPol::_Init() {
 ************ MY CODE*************
 ********************************/
 
-void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo)
+void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo){
+    logger->Info("Computing quota for [%s]", ainfo->papp->StrId());
+    
+    if (ainfo->pawm == nullptr){
+    
+        logger->Info("Computing quota first round");
+
+        if (available_cpu < INITIAL_DEFAULT_QUOTA)
+            ainfo->next_quota = available_cpu;
+        else           
+            ainfo->next_quota = INITIAL_DEFAULT_QUOTA;
+        
+        ainfo->pawm = std::make_shared<ba::WorkingMode>(
+        ainfo->papp->WorkingModes().size(), "Default", 1, ainfo->papp);
+    	
+	//Set initial integral error
+	ainfo->papp->SetAttribute("ierr",std::to_string(0));
+	
+	//Set initial error for derivative controller
+	ainfo->papp->SetAttribute("derr",std::to_string(0)); 
+	
+	available_cpu -= ainfo->next_quota;
+        
+        logger->Info("Next quota=%d, Previous quota=%d, Previously used CPU=%d, Delta=%d Available cpu=%d",
+            ainfo->next_quota,
+            ainfo->prev_quota,
+            ainfo->prev_used,
+            ainfo->prev_delta,
+            available_cpu);
+        
+        return;
+    }
+    
+    /*TEMPORARY: To elude cpu_usage problem
+     * I assume that the app needs more resources
+     * */
+    if ( ainfo->prev_delta < 0){
+        ainfo->prev_delta = 0;
+    }
+    
+    int64_t error, ierr, derr;
+    int64_t var, pvar, ivar, dvar;
+    
+    //PROPORTIONAL CONTROLLER:
+    //Less quota required
+    if (ainfo->prev_delta > ADMISSIBLE_DELTA)
+	    error = ainfo->prev_delta - ADMISSIBLE_DELTA/2;
+    
+    //More quota required
+    else if (ainfo->prev_delta == 0)
+	    error = SPAZIO;
+    
+	//We converged into an admissible delta    
+    else {
+        ainfo->next_quota = ainfo->prev_quota;
+        
+        ainfo->pawm = std::make_shared<ba::WorkingMode>(
+        ainfo->papp->WorkingModes().size(), "Convergent", 1, ainfo->papp);
+    
+        logger->Info("New settings: Next quota=%d, Previous quota=%d, Previously used CPU=%d, Delta=%u Available cpu=%d",
+                ainfo->next_quota,
+                ainfo->prev_quota,
+                ainfo->prev_used,
+                ainfo->prev_delta,
+                available_cpu);
+        return;
+    }
+    pvar = kp*error;
+
+    //INTEGRAL CONTROLLER
+    ierr = std::stoll(ainfo->papp->GetAttribute("ierr")) + error;
+    ivar = ki*ierr;
+    
+    //DERIVATIVE CONTROLLER
+    derr = error - std::stoll(ainfo->papp->GetAttribute("derr"));
+    dvar = kd*derr;
+    
+    //Compute cumulative variation
+    var = pvar + ivar + dvar;
+    
+    //check available cpu
+    if (var > 0)
+        var = (available_cpu > var) ? var : available_cpu;
+    
+    ainfo->next_quota = ainfo->prev_quota + var;
+    
+    //Create WM
+    ainfo->pawm = std::make_shared<ba::WorkingMode>(
+        ainfo->papp->WorkingModes().size(), "Adaptation", 1, ainfo->papp);
+    
+    //Update errors
+    ainfo->papp->SetAttribute("ierr",std::to_string(ierr));
+	ainfo->papp->SetAttribute("derr",std::to_string(error)); 
+    
+    //update available cpu
+    if (ainfo->next_quota > ainfo->prev_quota)
+        available_cpu -= ainfo->next_quota - ainfo->prev_quota;
+    else
+        available_cpu += ainfo->prev_quota - ainfo->next_quota;
+    
+    logger->Info("New settings: Next quota=%d, Previous quota=%d, Previously used CPU=%d, Delta=%u Available cpu=%d",
+            ainfo->next_quota,
+            ainfo->prev_quota,
+            ainfo->prev_used,
+            ainfo->prev_delta,
+            available_cpu);
+    
+    
+}
+/*void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo)
 {
     logger->Info("Computing quota for [%s]", ainfo->papp->StrId());
     
@@ -141,11 +250,11 @@ void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo)
         
         return;
     }
-    
+    */
     /*TEMPORARY: To elude cpu_usage problem
      * I assume that the app needs more resources
      * */
-    if ( ainfo->prev_delta > ainfo->prev_quota){
+   /* if ( ainfo->prev_delta > ainfo->prev_quota){
         ainfo->prev_delta = 0;
     }
     
@@ -255,7 +364,7 @@ void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo)
             ainfo->prev_used,
             ainfo->prev_delta,
             available_cpu);
-}
+}*/
 
 
 AppInfo_t Adaptive_cpuSchedPol::InitializeAppInfo(bbque::app::AppCPtr_t papp){
