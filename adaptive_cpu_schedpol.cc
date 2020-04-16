@@ -33,11 +33,10 @@
 
 #define MODULE_CONFIG SCHEDULER_POLICY_CONFIG "." SCHEDULER_POLICY_NAME
 
-#define INITIAL_DEFAULT_QUOTA 100
+#define INITIAL_DEFAULT_QUOTA 150
 #define ADMISSIBLE_DELTA 10
-#define QUOTA_EXPANSION_TERM 0.2
-#define QUOTA_REDUCTION_TERM 2
-#define DECREASING_PERC 0.1
+#define NEGATIVE_DELTA -5
+#define THRESHOLD 1
 
 using namespace std::placeholders;
 
@@ -98,6 +97,16 @@ SchedulerPolicyIF::ExitCode_t Adaptive_cpuSchedPol::_Init() {
     nr_apps = sys->SchedulablesCount(ba::Schedulable::READY);
     nr_apps += sys->SchedulablesCount(ba::Schedulable::RUNNING);
     logger->Info("Init: nr. active applications = %d", nr_apps);
+    
+    available_cpu = ra.Available("sys.cpu.pe");
+    
+    std::string s;
+    
+    std::ifstream fin("input.csv");
+
+    fin >> s >> kp >> ki >> kd;
+    
+    logger->Info("Running with kp=%f, ki=%f, kd=%f", kp, ki, kd);
 
     return SCHED_OK;
 }
@@ -123,18 +132,15 @@ void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo){
         
         ainfo->pawm = std::make_shared<ba::WorkingMode>(
         ainfo->papp->WorkingModes().size(), "Default", 1, ainfo->papp);
-    	
-	//Set initial integral error
-	ainfo->papp->SetAttribute("ierr",std::to_string(0));
-	
-	//Set initial error for derivative controller
-	ainfo->papp->SetAttribute("derr",std::to_string(0)); 
-    
-    //Set coefficient for expected error in case of insufficient quota
-    ainfo->papp->SetAttribute("esterr", std::to_string(esterr));
-	
-	available_cpu -= ainfo->next_quota;
+                 
+        //Set initial integral error
+        ainfo->papp->SetAttribute("ierr",std::to_string(0));
         
+        //Set initial error for derivative controller
+        ainfo->papp->SetAttribute("derr",std::to_string(0)); 
+        
+        available_cpu -= ainfo->next_quota;
+            
         logger->Info("Next quota=%d, Previous quota=%d, Previously used CPU=%d, Delta=%d Available cpu=%d",
             ainfo->next_quota,
             ainfo->prev_quota,
@@ -142,18 +148,37 @@ void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo){
             ainfo->prev_delta,
             available_cpu);
         
+        std::ofstream myfile;
+        myfile.open ("error "+std::to_string(kp)+"-"+std::to_string(ki)+"-"+std::to_string(kd)+".csv", std::ios::out | std::ios::app);
+        myfile << "AAAA" << "\n";
+        myfile.close();
+        
+        std::ofstream myfile1;
+        myfile1.open ("next_quota "+std::to_string(kp)+"-"+std::to_string(ki)+"-"+std::to_string(kd)+".csv", std::ios::out | std::ios::app);
+        myfile1 << "AAAA" << "\n";
+        myfile1.close();
+        
+        std::ofstream myfile2;
+        myfile2.open ("next_quota_usage "+std::to_string(kp)+"-"+std::to_string(ki)+"-"+std::to_string(kd)+".csv", std::ios::out | std::ios::app);
+        myfile2 << "AAAA" << ", " << "BBBB" << "\n";
+        myfile2.close();
+        
+            
+        std::ofstream myfile3;
+        myfile3.open ("delta "+std::to_string(kp)+"-"+std::to_string(ki)+"-"+std::to_string(kd)+".csv", std::ios::out | std::ios::app);
+        myfile3 << "AAAA" << "\n";
+        myfile3.close();
+        
         return;
     }
     
-    /*TEMPORARY: To elude cpu_usage problem
-     * I assume that the app needs more resources
-     * */
-    if ( ainfo->prev_delta > ainfo->prev_quota){
-        ainfo->prev_delta = 0;
+    //if cpu_usage==quota we push a forfait delta
+    if (ainfo->prev_used >= ainfo->prev_quota - THRESHOLD){
+        ainfo->prev_delta = NEGATIVE_DELTA;
     }
     
-    int64_t error, ierr, derr, esterr;
-    int64_t var, pvar, ivar, dvar;
+    int64_t error, ierr, derr;
+    int64_t cv, pvar, ivar, dvar;
     
     //PROPORTIONAL CONTROLLER:
     error = ADMISSIBLE_DELTA/2 - ainfo->prev_delta;
@@ -162,14 +187,6 @@ void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo){
     if (abs(error) < ADMISSIBLE_DELTA/2)
         error = 0;
     
-    //the quota is not enough
-    else if (error == ADMISSIBLE_DELTA/2){
-        //since we dont't have the amount of error in this case 
-        esterr = std::stof(ainfo->papp->GetAttribute("esterr"));
-        error += esterr;
-        ke -= ke*DECREASING_PERC;
-        ainfo->papp->SetAttribute("esterr", std::to_string(ke*esterr));
-    }
     pvar = kp*error;
 
     //INTEGRAL CONTROLLER
@@ -180,35 +197,52 @@ void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo){
     derr = error - std::stoll(ainfo->papp->GetAttribute("derr"));
     dvar = kd*derr;
     
-    //Compute cumulative variation
-    var = pvar + ivar + dvar;
+    logger->Info("pvar=%d, ivar=%d, dvar=%d", pvar, ivar, dvar);
+    //Compute control variable
+    cv = pvar + ivar + dvar;
     
     //check available cpu
-    if (var > 0)
-        var = (available_cpu > var) ? var : available_cpu;
+    if (cv > 0)
+       cv = (available_cpu > cv) ? cv : available_cpu;
+    else
+        //reset in case of fault
+        if (abs(cv) > ainfo->prev_quota){
+            logger->Error("App [%s] requires quota lower than zero: resetting to initial default quota", ainfo->papp->StrId());
+            ainfo->next_quota = (available_cpu > INITIAL_DEFAULT_QUOTA) ? INITIAL_DEFAULT_QUOTA : available_cpu;
+        }
     
-    ainfo->next_quota = ainfo->prev_quota + var;
+    ainfo->next_quota = ainfo->prev_quota + cv;
     
-    //Create WM
+    //Create AWM
     ainfo->pawm = std::make_shared<ba::WorkingMode>(
         ainfo->papp->WorkingModes().size(), "Adaptation", 1, ainfo->papp);
     
-    //Update errors
+    //Update errors and expected delta
     ainfo->papp->SetAttribute("ierr",std::to_string(ierr));
 	ainfo->papp->SetAttribute("derr",std::to_string(error)); 
-    
+        
     //update available cpu
     if (ainfo->next_quota > ainfo->prev_quota)
         available_cpu -= ainfo->next_quota - ainfo->prev_quota;
     else
         available_cpu += ainfo->prev_quota - ainfo->next_quota;
     
-    logger->Info("New settings: Next quota=%d, Previous quota=%d, Previously used CPU=%d, Delta=%u Available cpu=%d",
+    logger->Info("Error = %d, cv=%d",
+                 error,
+                 cv);
+    
+    logger->Info("New settings: Next quota=%d, Previous quota=%d, Previously used CPU=%d, Delta=%d Available cpu=%d",
             ainfo->next_quota,
             ainfo->prev_quota,
             ainfo->prev_used,
             ainfo->prev_delta,
             available_cpu);
+    
+        
+    std::ofstream myfile;
+    myfile.open ("error "+std::to_string(kp)+"-"+std::to_string(ki)+"-"+std::to_string(kd)+".csv", std::ios::out | std::ios::app);
+    myfile << error << "\n";
+    myfile.close();
 }
 
 AppInfo_t Adaptive_cpuSchedPol::InitializeAppInfo(bbque::app::AppCPtr_t papp){
@@ -253,28 +287,36 @@ Adaptive_cpuSchedPol::AssignWorkingMode(bbque::app::AppCPtr_t papp)
     //it just initializes a struct with all the info about the app, to have it in a compact way
     AppInfo_t ainfo = Adaptive_cpuSchedPol::InitializeAppInfo(papp);
     
-    logger->Info("Initialized app [%s] info: Previous quota=%d, Previously used CPU=%d, Delta=%u Available cpu=%d",
+    logger->Info("Initialized app [%s] info: Previous quota=%d, Previously used CPU=%d, Delta=%d Available cpu=%d",
             papp->StrId(),
             ainfo.prev_quota,
             ainfo.prev_used,
             ainfo.prev_delta,
             available_cpu);
     
-    if (available_cpu == 0 && ainfo.prev_delta == 0){
-        if (ainfo.pawm == nullptr){
-            logger->Info("AssignWorkingMode: Not enough available resources to schedule [%s]",
-                papp->StrId());
-            return SCHED_SKIP_APP;
-        }
-        else {
-            logger->Error("AssignWorkingMode: Not enough available resources to increase quota of [%s]",
-                papp->StrId());
-            am.ScheduleRequestAsPrev(papp, sched_status_view);
-            return SCHED_OK;
-        }
+    if (available_cpu == 0 && ainfo.pawm == nullptr){
+        logger->Info("AssignWorkingMode: Not enough available resources to schedule [%s]",
+            papp->StrId());
+        return SCHED_SKIP_APP;
     }
         
     Adaptive_cpuSchedPol::ComputeQuota(&ainfo);
+    
+    std::ofstream myfile1;
+    myfile1.open ("next_quota "+std::to_string(kp)+"-"+std::to_string(ki)+"-"+std::to_string(kd)+".csv", std::ios::out | std::ios::app);
+    myfile1 << ainfo.next_quota << "\n";
+    myfile1.close();
+    
+    std::ofstream myfile2;
+    myfile2.open ("next_quota_usage "+std::to_string(kp)+"-"+std::to_string(ki)+"-"+std::to_string(kd)+".csv", std::ios::out | std::ios::app);
+    myfile2 << ainfo.next_quota << ", " << ainfo.prev_used << "\n";
+    myfile2.close();
+    
+        
+    std::ofstream myfile3;
+    myfile3.open ("delta "+std::to_string(kp)+"-"+std::to_string(ki)+"-"+std::to_string(kd)+".csv", std::ios::out | std::ios::app);
+    myfile3 << ainfo.prev_delta << "\n";
+    myfile3.close();
     
     auto pawm = ainfo.pawm;
     
@@ -349,12 +391,6 @@ Adaptive_cpuSchedPol::Schedule(
     * INSERT YOUR CODE HERE
     **/
     
-    std::ifstream fin("input.txt");
-
-    fin >> ke;
-
-    logger->Info("AAAA %f ", ke, kp, ki, kd);
-    available_cpu = ra.Available("sys.cpu.pe");
     
     auto assign_awm = std::bind(
         static_cast<ExitCode_t (Adaptive_cpuSchedPol::*)(ba::AppCPtr_t)>

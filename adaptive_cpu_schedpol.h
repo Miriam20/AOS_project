@@ -46,7 +46,7 @@ struct AppInfo_t
     bbque::app::AwmPtr_t pawm;
     uint64_t prev_quota;
     uint64_t prev_used;
-    uint64_t prev_delta;
+    int64_t prev_delta;
     uint64_t next_quota;
 };
 
@@ -112,9 +112,6 @@ private:
     std::vector<uint32_t> sys_ids;
     
     uint64_t available_cpu;
-    
-    uint64_t esterr;
-    float ke;
 
     float kp;
     float ki;
