@@ -27,9 +27,13 @@
 #include "bbque/plugins/scheduler_policy.h"
 #include "bbque/scheduler_manager.h"
 
-#define SCHEDULER_POLICY_NAME "adaptive_cpu"
+#define SCHEDULER_POLICY_NAME "adaptiveCPU"
 
 #define MODULE_NAMESPACE SCHEDULER_POLICY_NAMESPACE "." SCHEDULER_POLICY_NAME
+#define NEGATIVE_DELTA -5
+#define DEFAULT_KP 0.6
+#define DEFAULT_KI 0.3
+#define DEFAULT_KD 0.1
 
 using bbque::res::RViewToken_t;
 using bbque::utils::MetricsCollector;
@@ -53,11 +57,11 @@ struct AppInfo_t
 class LoggerIF;
 
 /**
-* @class Adaptive_cpuSchedPol
+* @class AdaptiveCPUSchedPol
 *
-* Adaptive_cpu scheduler policy registered as a dynamic C++ plugin.
+* AdaptiveCPU scheduler policy registered as a dynamic C++ plugin.
 */
-class Adaptive_cpuSchedPol: public SchedulerPolicyIF {
+class AdaptiveCPUSchedPol: public SchedulerPolicyIF {
 
 public:
 
@@ -79,7 +83,7 @@ public:
     /**
     * @brief Destructor
     */
-    virtual ~Adaptive_cpuSchedPol();
+    virtual ~AdaptiveCPUSchedPol();
 
     /**
     * @brief Return the name of the policy plugin
@@ -94,6 +98,7 @@ public:
     ExitCode_t Schedule(System & system, RViewToken_t & status_view);
     ExitCode_t AssignWorkingMode(bbque::app::AppCPtr_t papp);
     AppInfo_t InitializeAppInfo(bbque::app::AppCPtr_t papp);
+    ExitCode_t ScheduleApplications(std::function <ExitCode_t(bbque::app::AppCPtr_t) > do_func);
     void ComputeQuota(AppInfo_t * ainfo);
     
 private:
@@ -112,12 +117,16 @@ private:
     std::vector<uint32_t> sys_ids;
     
     uint64_t available_cpu;
+    uint64_t quota_not_run_apps;
 
+    int64_t neg_delta;
     float kp;
     float ki;
     float kd;
     
     uint32_t nr_apps;
+    uint32_t nr_run_apps;
+    uint32_t nr_not_run_apps;
 
     /**
     * @brief Constructor
@@ -125,7 +134,7 @@ private:
     * Plugins objects could be build only by using the "create" method.
     * Usually the PluginManager acts as object
     */
-    Adaptive_cpuSchedPol();
+    AdaptiveCPUSchedPol();
 
     /**
     * @brief Optional initialization member function

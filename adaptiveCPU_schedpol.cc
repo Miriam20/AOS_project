@@ -15,7 +15,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "adaptive_cpu_schedpol.h"
+#include "adaptiveCPU_schedpol.h"
 
 #include <cstdlib>
 #include <cstdint>
@@ -34,8 +34,8 @@
 #define MODULE_CONFIG SCHEDULER_POLICY_CONFIG "." SCHEDULER_POLICY_NAME
 
 #define INITIAL_DEFAULT_QUOTA 150
+#define MIN_ASSIGNABLE_QUOTA 10
 #define ADMISSIBLE_DELTA 10
-#define NEGATIVE_DELTA -5
 #define THRESHOLD 1
 
 using namespace std::placeholders;
@@ -48,24 +48,24 @@ namespace bbque {
     
 // :::::::::::::::::::::: Static plugin interface ::::::::::::::::::::::::::::
 
-void * Adaptive_cpuSchedPol::Create(PF_ObjectParams *) {
-    return new Adaptive_cpuSchedPol();
+void * AdaptiveCPUSchedPol::Create(PF_ObjectParams *) {
+    return new AdaptiveCPUSchedPol();
     }
 
-    int32_t Adaptive_cpuSchedPol::Destroy(void * plugin) {
+    int32_t AdaptiveCPUSchedPol::Destroy(void * plugin) {
     if (!plugin)
         return -1;
-    delete (Adaptive_cpuSchedPol *)plugin;
+    delete (AdaptiveCPUSchedPol *)plugin;
     return 0;
     }
 
     // ::::::::::::::::::::: Scheduler policy module interface :::::::::::::::::::
 
-    char const * Adaptive_cpuSchedPol::Name() {
+    char const * AdaptiveCPUSchedPol::Name() {
     return SCHEDULER_POLICY_NAME;
     }
 
-    Adaptive_cpuSchedPol::Adaptive_cpuSchedPol():
+    AdaptiveCPUSchedPol::AdaptiveCPUSchedPol():
         cm(ConfigurationManager::GetInstance()),
         ra(ResourceAccounter::GetInstance()) {
     logger = bu::Logger::GetLogger(MODULE_NAMESPACE);
@@ -78,11 +78,11 @@ void * Adaptive_cpuSchedPol::Create(PF_ObjectParams *) {
     }
 
 
-    Adaptive_cpuSchedPol::~Adaptive_cpuSchedPol() {
+    AdaptiveCPUSchedPol::~AdaptiveCPUSchedPol() {
 
 }
 
-SchedulerPolicyIF::ExitCode_t Adaptive_cpuSchedPol::_Init() {
+SchedulerPolicyIF::ExitCode_t AdaptiveCPUSchedPol::_Init() {
     // Processing elements IDs
     auto & resource_types = sys->ResourceTypes();
     auto const & r_ids_entry = resource_types.find(br::ResourceType::PROC_ELEMENT);
@@ -94,17 +94,21 @@ SchedulerPolicyIF::ExitCode_t Adaptive_cpuSchedPol::_Init() {
     }
 
     // Applications count
-    nr_apps = sys->SchedulablesCount(ba::Schedulable::READY);
-    nr_apps += sys->SchedulablesCount(ba::Schedulable::RUNNING);
+    nr_not_run_apps = sys->SchedulablesCount(ba::Schedulable::READY);
+    nr_not_run_apps += sys->SchedulablesCount(ba::Schedulable::THAWED);
+    nr_not_run_apps += sys->SchedulablesCount(ba::Schedulable::RESTORING);
+    
+    nr_run_apps = sys->SchedulablesCount(ba::Schedulable::RUNNING);
+    
+    nr_apps = nr_not_run_apps + nr_run_apps;
     logger->Info("Init: nr. active applications = %d", nr_apps);
     
     available_cpu = ra.Available("sys.cpu.pe");
     
-    std::string s;
-    
-    std::ifstream fin("input.csv");
-
-    fin >> s >> kp >> ki >> kd;
+    kp = DEFAULT_KP;
+    ki = DEFAULT_KI;
+    kd = DEFAULT_KD;
+    neg_delta = NEGATIVE_DELTA;
     
     logger->Info("Running with kp=%f, ki=%f, kd=%f", kp, ki, kd);
 
@@ -118,15 +122,15 @@ SchedulerPolicyIF::ExitCode_t Adaptive_cpuSchedPol::_Init() {
 ************ MY CODE*************
 ********************************/
 
-void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo){
+void AdaptiveCPUSchedPol::ComputeQuota(AppInfo_t * ainfo){
     logger->Info("Computing quota for [%s]", ainfo->papp->StrId());
     
-    if (ainfo->pawm == nullptr){
+    if (!ainfo->papp->Running()){
     
         logger->Info("Computing quota first round");
 
-        if (available_cpu < INITIAL_DEFAULT_QUOTA)
-            ainfo->next_quota = available_cpu;
+        if (quota_not_run_apps < INITIAL_DEFAULT_QUOTA)
+            ainfo->next_quota = quota_not_run_apps;
         else           
             ainfo->next_quota = INITIAL_DEFAULT_QUOTA;
         
@@ -148,33 +152,12 @@ void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo){
             ainfo->prev_delta,
             available_cpu);
         
-        std::ofstream myfile;
-        myfile.open ("error "+std::to_string(kp)+"-"+std::to_string(ki)+"-"+std::to_string(kd)+".csv", std::ios::out | std::ios::app);
-        myfile << "AAAA" << "\n";
-        myfile.close();
-        
-        std::ofstream myfile1;
-        myfile1.open ("next_quota "+std::to_string(kp)+"-"+std::to_string(ki)+"-"+std::to_string(kd)+".csv", std::ios::out | std::ios::app);
-        myfile1 << "AAAA" << "\n";
-        myfile1.close();
-        
-        std::ofstream myfile2;
-        myfile2.open ("next_quota_usage "+std::to_string(kp)+"-"+std::to_string(ki)+"-"+std::to_string(kd)+".csv", std::ios::out | std::ios::app);
-        myfile2 << "AAAA" << ", " << "BBBB" << "\n";
-        myfile2.close();
-        
-            
-        std::ofstream myfile3;
-        myfile3.open ("delta "+std::to_string(kp)+"-"+std::to_string(ki)+"-"+std::to_string(kd)+".csv", std::ios::out | std::ios::app);
-        myfile3 << "AAAA" << "\n";
-        myfile3.close();
-        
         return;
     }
     
     //if cpu_usage==quota we push a forfait delta
     if (ainfo->prev_used >= ainfo->prev_quota - THRESHOLD){
-        ainfo->prev_delta = NEGATIVE_DELTA;
+        ainfo->prev_delta = neg_delta;
     }
     
     int64_t error, ierr, derr;
@@ -245,7 +228,7 @@ void Adaptive_cpuSchedPol::ComputeQuota(AppInfo_t * ainfo){
     myfile.close();
 }
 
-AppInfo_t Adaptive_cpuSchedPol::InitializeAppInfo(bbque::app::AppCPtr_t papp){
+AppInfo_t AdaptiveCPUSchedPol::InitializeAppInfo(bbque::app::AppCPtr_t papp){
     AppInfo_t ainfo;
     
     ainfo.papp = papp;
@@ -263,7 +246,7 @@ AppInfo_t Adaptive_cpuSchedPol::InitializeAppInfo(bbque::app::AppCPtr_t papp){
     
 
 SchedulerPolicyIF::ExitCode_t
-Adaptive_cpuSchedPol::AssignWorkingMode(bbque::app::AppCPtr_t papp)
+AdaptiveCPUSchedPol::AssignWorkingMode(bbque::app::AppCPtr_t papp)
 {  
     ApplicationManager & am(ApplicationManager::GetInstance());
 
@@ -284,8 +267,8 @@ Adaptive_cpuSchedPol::AssignWorkingMode(bbque::app::AppCPtr_t papp)
             prof.is_valid);
     }
     
-    //it just initializes a struct with all the info about the app, to have it in a compact way
-    AppInfo_t ainfo = Adaptive_cpuSchedPol::InitializeAppInfo(papp);
+    //it initializes a struct with all the info about the app, to have it in a compact way
+    AppInfo_t ainfo = AdaptiveCPUSchedPol::InitializeAppInfo(papp);
     
     logger->Info("Initialized app [%s] info: Previous quota=%d, Previously used CPU=%d, Delta=%d Available cpu=%d",
             papp->StrId(),
@@ -294,13 +277,13 @@ Adaptive_cpuSchedPol::AssignWorkingMode(bbque::app::AppCPtr_t papp)
             ainfo.prev_delta,
             available_cpu);
     
-    if (available_cpu == 0 && ainfo.pawm == nullptr){
+    if (quota_not_run_apps == 0 && !ainfo.papp->Running()){
         logger->Info("AssignWorkingMode: Not enough available resources to schedule [%s]",
             papp->StrId());
         return SCHED_SKIP_APP;
     }
         
-    Adaptive_cpuSchedPol::ComputeQuota(&ainfo);
+    AdaptiveCPUSchedPol::ComputeQuota(&ainfo);
     
     std::ofstream myfile1;
     myfile1.open ("next_quota "+std::to_string(kp)+"-"+std::to_string(ki)+"-"+std::to_string(kd)+".csv", std::ios::out | std::ios::app);
@@ -362,15 +345,96 @@ Adaptive_cpuSchedPol::AssignWorkingMode(bbque::app::AppCPtr_t papp)
 
 }
 
+SchedulerPolicyIF::ExitCode_t 
+AdaptiveCPUSchedPol::ScheduleApplications(std::function
+<SchedulerPolicyIF::ExitCode_t(bbque::app::AppCPtr_t) > do_func)
+{
+            
+    AppsUidMapIt app_it;
+    ba::AppCPtr_t app_ptr;
+
+    //Fair alternative among not running applications
+    app_ptr = sys->GetFirstRunning(app_it);
+    for (; app_ptr; app_ptr = sys->GetNextRunning(app_it)) {
+            do_func(app_ptr);
+    }
+    
+    if (nr_not_run_apps != 0)
+        quota_not_run_apps = available_cpu / nr_not_run_apps;
+    
+    app_ptr = sys->GetFirstReady(app_it);
+    for (; app_ptr; app_ptr = sys->GetNextReady(app_it)) {
+            do_func(app_ptr);
+    }
+
+    app_ptr = sys->GetFirstThawed(app_it);
+    for (; app_ptr; app_ptr = sys->GetNextThawed(app_it)) {
+            do_func(app_ptr);
+    }
+
+    app_ptr = sys->GetFirstRestoring(app_it);
+    for (; app_ptr; app_ptr = sys->GetNextRestoring(app_it)) {
+            do_func(app_ptr);
+    }
+    
+    return SCHED_OK;
+    
+    //Other alternative: assign quota>0 only to the number of apps s.t. quota_not_run_apps=available_cpu / nr_not_run_apps > 0
+    //comment above and uncomment here if preferred
+   /* AppsUidMapIt app_it;
+    ba::AppCPtr_t app_ptr;
+    
+    app_ptr = sys->GetFirstRunning(app_it);
+    for (; app_ptr; app_ptr = sys->GetNextRunning(app_it)) {
+            do_func(app_ptr);
+    }
+    
+    if (nr_not_run_apps != 0)
+        quota_not_run_apps = available_cpu / nr_not_run_apps;
+        
+    uint64_t nr_schedulable_app;
+    nr_schedulable_app = nr_not_run_apps;
+    
+    if ( available_cpu >= MIN_ASSIGNABLE_QUOTA && quota_not_run_apps < MIN_ASSIGNABLE_QUOTA)
+        while (quota_not_run_apps >= MIN_ASSIGNABLE_QUOTA){
+            nr_schedulable_app--;
+            quota_not_run_apps = available_cpu / nr_schedulable_app;
+        }
+    
+    app_ptr = sys->GetFirstReady(app_it);
+    for (; app_ptr; app_ptr = sys->GetNextReady(app_it)) {
+        if (nr_schedulable_app == 0)
+            quota_not_run_apps = 0;
+        do_func(app_ptr);
+        nr_schedulable_app--;
+    }
+
+    app_ptr = sys->GetFirstThawed(app_it);
+    for (; app_ptr; app_ptr = sys->GetNextThawed(app_it)) {
+        if (nr_schedulable_app == 0)
+            quota_not_run_apps = 0;
+        do_func(app_ptr);
+        nr_schedulable_app--;
+    }
+
+    app_ptr = sys->GetFirstRestoring(app_it);
+    for (; app_ptr; app_ptr = sys->GetNextRestoring(app_it)) {
+        if (nr_schedulable_app == 0)
+            quota_not_run_apps = 0;
+        do_func(app_ptr);
+        nr_schedulable_app--;
+    }
+
+    return SCHED_OK;*/
+}
+
 /********************************
 ************ MY CODE*************
 ********************************/
 
 
-
-
 SchedulerPolicyIF::ExitCode_t
-Adaptive_cpuSchedPol::Schedule(
+AdaptiveCPUSchedPol::Schedule(
         System & system,
         RViewToken_t & status_view) {
 
@@ -392,12 +456,25 @@ Adaptive_cpuSchedPol::Schedule(
     **/
     
     
-    auto assign_awm = std::bind(
-        static_cast<ExitCode_t (Adaptive_cpuSchedPol::*)(ba::AppCPtr_t)>
-        (&Adaptive_cpuSchedPol::AssignWorkingMode),
+    /*auto assign_awm = std::bind(
+        static_cast<ExitCode_t (AdaptiveCPUSchedPol::*)(ba::AppCPtr_t)>
+        (&AdaptiveCPUSchedPol::AssignWorkingMode),
         this, _1);
     
-    ForEachApplicationToScheduleDo(assign_awm);
+    result = ForEachApplicationToScheduleDo(assign_awm);
+    if (result != SCHED_OK)
+        return result;
+    */
+    
+    bbque::app::AppCPtr_t papp;
+	AppsUidMapIt app_it;
+    
+    auto assign_awm = std::bind(
+        static_cast<ExitCode_t (AdaptiveCPUSchedPol::*)(ba::AppCPtr_t)>
+        (&AdaptiveCPUSchedPol::AssignWorkingMode),
+        this, _1);
+    
+    result = AdaptiveCPUSchedPol::ScheduleApplications(assign_awm);
     if (result != SCHED_OK)
         return result;
     

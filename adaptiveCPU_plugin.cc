@@ -15,8 +15,8 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "adaptive_cpu_plugin.h"
-#include "adaptive_cpu_schedpol.h"
+#include "adaptiveCPU_plugin.h"
+#include "adaptiveCPU_schedpol.h"
 #include "bbque/plugins/static_plugin.h"
 
 namespace bp = bbque::plugins;

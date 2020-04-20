@@ -1,0 +1,5 @@
+config BBQUE_SCHEDPOL_ADAPTIVE_CPU
+  bool "Adaptive_cpu"
+  default n
+  ---help---
+  Description...
