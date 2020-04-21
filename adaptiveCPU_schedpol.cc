@@ -105,32 +105,32 @@ SchedulerPolicyIF::ExitCode_t AdaptiveCPUSchedPol::_Init() {
     available_cpu = ra.Available("sys.cpu.pe");
     
     po::options_description opts_desc("AdaptiveCPUSchedPol Parameters Options");
-	opts_desc.add_options()
-		("AdaptiveCPUSchedPol.neg_delta",
-		po::value<int64_t>(
-		&this->neg_delta)->default_value(DEFAULT_NEG_DELTA),
-		"Value of neg_delta");
-    
     opts_desc.add_options()
-		("AdaptiveCPUSchedPol.kp",
-		po::value<float>(
-		&this->kp)->default_value(DEFAULT_KP),
-		"Value of coefficient kp");
-	
-	opts_desc.add_options()
-		("AdaptiveCPUSchedPol.ki",
-		po::value<float>(
-		&this->ki)->default_value(DEFAULT_KI),
-		"Value of coefficient ki");
-	
-	opts_desc.add_options()
-		("AdaptiveCPUSchedPol.kd",
-		po::value<float>(
-		&this->kd)->default_value(DEFAULT_KD),
-		"Value of coefficient kd");
-	po::variables_map opts_vm;
-	cm.ParseConfigurationFile(opts_desc, opts_vm);
-    
+        ("AdaptiveCPUSchedPol.neg_delta",
+        po::value<int64_t>(
+        &this->neg_delta)->default_value(DEFAULT_NEG_DELTA),
+        "Value of neg_delta");
+
+    opts_desc.add_options()
+        ("AdaptiveCPUSchedPol.kp",
+        po::value<float>(
+        &this->kp)->default_value(DEFAULT_KP),
+        "Value of coefficient kp");
+
+    opts_desc.add_options()
+        ("AdaptiveCPUSchedPol.ki",
+        po::value<float>(
+        &this->ki)->default_value(DEFAULT_KI),
+        "Value of coefficient ki");
+
+    opts_desc.add_options()
+        ("AdaptiveCPUSchedPol.kd",
+        po::value<float>(
+        &this->kd)->default_value(DEFAULT_KD),
+        "Value of coefficient kd");
+    po::variables_map opts_vm;
+    cm.ParseConfigurationFile(opts_desc, opts_vm);
+
     logger->Info("Running with neg_delta=%d, kp=%f, ki=%f, kd=%f", 
                  neg_delta, kp, ki, kd);
 
