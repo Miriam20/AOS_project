@@ -382,7 +382,7 @@ AdaptiveCPUSchedPol::ScheduleApplications(std::function
     
     //Other alternative: assign quota>0 only to the number of apps s.t. quota_not_run_apps>=MIN_ASSIGNABLE_QUOTA
     //comment above and uncomment here if preferred
-    /* AppsUidMapIt app_it;
+    /*AppsUidMapIt app_it;
     ba::AppCPtr_t app_ptr;
     
     app_ptr = sys->GetFirstRunning(app_it);
@@ -390,40 +390,48 @@ AdaptiveCPUSchedPol::ScheduleApplications(std::function
             do_func(app_ptr);
     }
     
-    if (nr_not_run_apps != 0)
+    if (nr_not_run_apps != 0){
+        
         quota_not_run_apps = available_cpu / nr_not_run_apps;
         
-    uint64_t nr_schedulable_app;
-    nr_schedulable_app = nr_not_run_apps;
-    
-    if ( available_cpu >= MIN_ASSIGNABLE_QUOTA && quota_not_run_apps < MIN_ASSIGNABLE_QUOTA)
-        while (quota_not_run_apps >= MIN_ASSIGNABLE_QUOTA){
-            nr_schedulable_app--;
-            quota_not_run_apps = available_cpu / nr_schedulable_app;
+        uint64_t nr_schedulable_app;
+        nr_schedulable_app = nr_not_run_apps;
+        
+        if (available_cpu < MIN_ASSIGNABLE_QUOTA)
+            nr_schedulable_app = 0;
+        
+        else if (quota_not_run_apps < MIN_ASSIGNABLE_QUOTA)
+            while (quota_not_run_apps < MIN_ASSIGNABLE_QUOTA){
+                nr_schedulable_app--;
+                quota_not_run_apps = available_cpu / nr_schedulable_app;
+            }
+        
+        app_ptr = sys->GetFirstReady(app_it);
+        for (; app_ptr; app_ptr = sys->GetNextReady(app_it)) {
+            if (nr_schedulable_app == 0)
+                quota_not_run_apps = 0;
+            else 
+                nr_schedulable_app--;
+            do_func(app_ptr);
         }
-    
-    app_ptr = sys->GetFirstReady(app_it);
-    for (; app_ptr; app_ptr = sys->GetNextReady(app_it)) {
-        if (nr_schedulable_app == 0)
-            quota_not_run_apps = 0;
-        do_func(app_ptr);
-        nr_schedulable_app--;
-    }
 
-    app_ptr = sys->GetFirstThawed(app_it);
-    for (; app_ptr; app_ptr = sys->GetNextThawed(app_it)) {
-        if (nr_schedulable_app == 0)
-            quota_not_run_apps = 0;
-        do_func(app_ptr);
-        nr_schedulable_app--;
-    }
+        app_ptr = sys->GetFirstThawed(app_it);
+        for (; app_ptr; app_ptr = sys->GetNextThawed(app_it)) {
+            if (nr_schedulable_app == 0)
+                quota_not_run_apps = 0;
+            else 
+                nr_schedulable_app--;
+            do_func(app_ptr);
+        }
 
-    app_ptr = sys->GetFirstRestoring(app_it);
-    for (; app_ptr; app_ptr = sys->GetNextRestoring(app_it)) {
-        if (nr_schedulable_app == 0)
-            quota_not_run_apps = 0;
-        do_func(app_ptr);
-        nr_schedulable_app--;
+        app_ptr = sys->GetFirstRestoring(app_it);
+        for (; app_ptr; app_ptr = sys->GetNextRestoring(app_it)) {
+            if (nr_schedulable_app == 0)
+                quota_not_run_apps = 0;
+            else 
+                nr_schedulable_app--;
+            do_func(app_ptr);
+        }
     }
 
     return SCHED_OK;*/
