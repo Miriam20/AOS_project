@@ -22,7 +22,6 @@
 #include <iostream>
 #include <stdio.h>
 #include <fstream>
-
 #include "bbque/modules_factory.h"
 #include "bbque/utils/logging/logger.h"
 
@@ -105,12 +104,35 @@ SchedulerPolicyIF::ExitCode_t AdaptiveCPUSchedPol::_Init() {
     
     available_cpu = ra.Available("sys.cpu.pe");
     
-    kp = DEFAULT_KP;
-    ki = DEFAULT_KI;
-    kd = DEFAULT_KD;
-    neg_delta = NEGATIVE_DELTA;
+    po::options_description opts_desc("AdaptiveCPUSchedPol Parameters Options");
+	opts_desc.add_options()
+		("AdaptiveCPUSchedPol.neg_delta",
+		po::value<int64_t>(
+		&this->neg_delta)->default_value(DEFAULT_NEG_DELTA),
+		"Value of neg_delta");
     
-    logger->Info("Running with kp=%f, ki=%f, kd=%f", kp, ki, kd);
+    opts_desc.add_options()
+		("AdaptiveCPUSchedPol.kp",
+		po::value<float>(
+		&this->kp)->default_value(DEFAULT_KP),
+		"Value of coefficient kp");
+	
+	opts_desc.add_options()
+		("AdaptiveCPUSchedPol.ki",
+		po::value<float>(
+		&this->ki)->default_value(DEFAULT_KI),
+		"Value of coefficient ki");
+	
+	opts_desc.add_options()
+		("AdaptiveCPUSchedPol.kd",
+		po::value<float>(
+		&this->kd)->default_value(DEFAULT_KD),
+		"Value of coefficient kd");
+	po::variables_map opts_vm;
+	cm.ParseConfigurationFile(opts_desc, opts_vm);
+    
+    logger->Info("Running with neg_delta=%d, kp=%f, ki=%f, kd=%f", 
+                 neg_delta, kp, ki, kd);
 
     return SCHED_OK;
 }
@@ -221,11 +243,6 @@ void AdaptiveCPUSchedPol::ComputeQuota(AppInfo_t * ainfo){
             ainfo->prev_delta,
             available_cpu);
     
-        
-    std::ofstream myfile;
-    myfile.open ("error "+std::to_string(kp)+"-"+std::to_string(ki)+"-"+std::to_string(kd)+".csv", std::ios::out | std::ios::app);
-    myfile << error << "\n";
-    myfile.close();
 }
 
 AppInfo_t AdaptiveCPUSchedPol::InitializeAppInfo(bbque::app::AppCPtr_t papp){
@@ -284,22 +301,6 @@ AdaptiveCPUSchedPol::AssignWorkingMode(bbque::app::AppCPtr_t papp)
     }
         
     AdaptiveCPUSchedPol::ComputeQuota(&ainfo);
-    
-    std::ofstream myfile1;
-    myfile1.open ("next_quota "+std::to_string(kp)+"-"+std::to_string(ki)+"-"+std::to_string(kd)+".csv", std::ios::out | std::ios::app);
-    myfile1 << ainfo.next_quota << "\n";
-    myfile1.close();
-    
-    std::ofstream myfile2;
-    myfile2.open ("next_quota_usage "+std::to_string(kp)+"-"+std::to_string(ki)+"-"+std::to_string(kd)+".csv", std::ios::out | std::ios::app);
-    myfile2 << ainfo.next_quota << ", " << ainfo.prev_used << "\n";
-    myfile2.close();
-    
-        
-    std::ofstream myfile3;
-    myfile3.open ("delta "+std::to_string(kp)+"-"+std::to_string(ki)+"-"+std::to_string(kd)+".csv", std::ios::out | std::ios::app);
-    myfile3 << ainfo.prev_delta << "\n";
-    myfile3.close();
     
     auto pawm = ainfo.pawm;
     
@@ -379,9 +380,9 @@ AdaptiveCPUSchedPol::ScheduleApplications(std::function
     
     return SCHED_OK;
     
-    //Other alternative: assign quota>0 only to the number of apps s.t. quota_not_run_apps=available_cpu / nr_not_run_apps > 0
+    //Other alternative: assign quota>0 only to the number of apps s.t. quota_not_run_apps>=MIN_ASSIGNABLE_QUOTA
     //comment above and uncomment here if preferred
-   /* AppsUidMapIt app_it;
+    /* AppsUidMapIt app_it;
     ba::AppCPtr_t app_ptr;
     
     app_ptr = sys->GetFirstRunning(app_it);
@@ -465,9 +466,6 @@ AdaptiveCPUSchedPol::Schedule(
     if (result != SCHED_OK)
         return result;
     */
-    
-    bbque::app::AppCPtr_t papp;
-	AppsUidMapIt app_it;
     
     auto assign_awm = std::bind(
         static_cast<ExitCode_t (AdaptiveCPUSchedPol::*)(ba::AppCPtr_t)>

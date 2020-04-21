@@ -15,8 +15,8 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef BBQUE_ADAPTIVE_CPU_PLUGIN_H_
-#define BBQUE_ADAPTIVE_CPU_PLUGIN_H_
+#ifndef BBQUE_ADAPTIVECPU_PLUGIN_H_
+#define BBQUE_ADAPTIVECPU_PLUGIN_H_
 
 #include <cstdint>
 
@@ -25,4 +25,4 @@
 extern "C" int32_t PF_exitFunc();
 extern "C" PF_ExitFunc PF_initPlugin(const PF_PlatformServices * params);
 
-#endif // BBQUE_ADAPTIVE_CPU_PLUGIN_H_
+#endif // BBQUE_ADAPTIVECPU_PLUGIN_H_

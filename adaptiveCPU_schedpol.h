@@ -15,8 +15,8 @@
 * along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#ifndef BBQUE_ADAPTIVE_CPU_SCHEDPOL_H_
-#define BBQUE_ADAPTIVE_CPU_SCHEDPOL_H_
+#ifndef BBQUE_ADAPTIVE_CPUSCHEDPOL_H_
+#define BBQUE_ADAPTIVE_CPUSCHEDPOL_H_
 
 #include <cstdint>
 #include <list>
@@ -30,7 +30,7 @@
 #define SCHEDULER_POLICY_NAME "adaptiveCPU"
 
 #define MODULE_NAMESPACE SCHEDULER_POLICY_NAMESPACE "." SCHEDULER_POLICY_NAME
-#define NEGATIVE_DELTA -5
+#define DEFAULT_NEG_DELTA -5
 #define DEFAULT_KP 0.6
 #define DEFAULT_KI 0.3
 #define DEFAULT_KD 0.1
